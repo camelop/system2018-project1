@@ -4,6 +4,9 @@
 #include <unistd.h>
 #include <sys/reg.h>
 #include <sys/syscall.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 const int long_size = sizeof(long);//字长 若本机是64位，则字长应为8字节long
 
@@ -11,6 +14,14 @@ const int long_size = sizeof(long);//字长 若本机是64位，则字长应为8
 * TODO 反转str指针指向的字符串
 **/
 void reverse(char *str){
+  int len = strlen(str);
+  char temp;
+  int i;
+  for (i = 0; i < len / 2; ++i){
+    temp = str[i];
+    str[i] = str[len - i - 1];
+    str[len - i - 1] = temp;
+  }
 }
 
 /**
@@ -20,6 +31,15 @@ void reverse(char *str){
 * 你可能会用到：memcpy函数
 **/
 void getdata(pid_t child, long addr, char *str, int len){
+  int i;
+  long temp;
+  for (i = 0; i < len/8; ++i){
+    temp = ptrace(PTRACE_PEEKTEXT, child, addr + i * long_size, NULL);
+    memcpy(str + i * 8, &temp, 8);  
+  } 
+  size_t finished = len / 8 * 8;
+  temp = ptrace(PTRACE_PEEKTEXT, child, addr + finished, NULL);
+  memcpy(str + finished, &temp, len - finished);
 }
 
 /**
@@ -27,7 +47,14 @@ void getdata(pid_t child, long addr, char *str, int len){
  * 使用 ptrace 的 PTRACE_POKEDATA 来写，需要注意的是由于64位机器的字长是8byte。
  * */
 void putdata(pid_t child, long addr, char *str, int len){
-
+  int i;
+  for (i = 0; i < len/8; ++i){
+    ptrace(PTRACE_POKETEXT, child, addr + i * long_size, *((long *)(str + i * long_size)));
+  }
+  size_t finished = len / 8 * 8;
+  if (finished < len) {
+    ptrace(PTRACE_POKETEXT, child, addr + finished, *((long*)(str + finished)));
+  }
 }
 
 int main(){
@@ -36,9 +63,9 @@ int main(){
   if (child < 0) {
     printf("fork error");
   } else if(child == 0) {
-     //子进程执行
-     ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-     execl("fantasy", "fantasy", NULL);
+    //子进程执行
+    ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+    execl("fantasy", "fantasy", NULL);
   } else {
     //父进程执行
     long orig_rax;
@@ -62,19 +89,21 @@ int main(){
           * 需要注意的是，RAX的宏定义是 ORIG_RAX，
           * 而 RDI RSI RDX 的宏定义为 RDI RSI RDX
           **/
+	  params[0] = ptrace(PTRACE_PEEKUSER, child, RDI * long_size, NULL);
+	  params[1] = ptrace(PTRACE_PEEKUSER, child, RSI * long_size, NULL);
+	  params[2] = ptrace(PTRACE_PEEKUSER, child, RDX * long_size, NULL);
           str = (char *)calloc((params[2]+1), sizeof(char));
-          getdata(child, params[1], str,
-                  params[2]);
+          getdata(child, params[1], str, params[2]);
           reverse(str);
-          putdata(child, params[1], str,
-                  params[2]);
-         } else {
+          putdata(child, params[1], str, params[2]);
+        } else {
           toggle = 0;
-       }
-     }
-    /**
-    * TODO 使用 PTRACE_SYSCALL 来让子进程进行系统调用。
-    **/
+        }
+      }
+//      /**
+//      * TODO 使用 PTRACE_SYSCALL 来让子进程进行系统调用。
+//      **/
+      ptrace(PTRACE_SYSCALL, child, 0, 0);
     }
   }
   return 0;
